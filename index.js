@@ -5,6 +5,42 @@ const port = process.env.PORT || 5000;
 require('dotenv').config()
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 
+const crypto = require('crypto');
+
+const algorithm = 'aes-256-cbc';
+const key = Buffer.from(process.env.ENCRYPTION_KEY, 'hex');
+const iv = crypto.randomBytes(16);
+
+// Encrypt function
+function encrypt(text) {
+    const iv = crypto.randomBytes(16); // ✅ Generate a new IV each time
+    let cipher = crypto.createCipheriv(algorithm, key, iv);
+    let encrypted = cipher.update(text);
+    encrypted = Buffer.concat([encrypted, cipher.final()]);
+    return iv.toString('hex') + ':' + encrypted.toString('hex');
+}
+
+// Decrypt function
+function decrypt(text) {
+    try {
+        const textParts = text.split(':');
+        if (textParts.length !== 2) {
+            throw new Error('Invalid encrypted data format');
+        }
+
+        const iv = Buffer.from(textParts[0], 'hex');
+        const encryptedText = Buffer.from(textParts[1], 'hex');
+
+        let decipher = crypto.createDecipheriv(algorithm, key, iv);
+        let decrypted = decipher.update(encryptedText);
+        decrypted = Buffer.concat([decrypted, decipher.final()]);
+
+        return decrypted.toString();
+    } catch (error) {
+        console.error('Decryption failed:', error.message);
+        return null;
+    }
+}
 //MIDDLEWARE
 app.use(cors());
 app.use(express.json());
@@ -35,14 +71,26 @@ async function run() {
 
         app.post('/saveCredentials', async (req, res) => {
             const addedItem = req.body;
+            if (addedItem.platform_password) {
+                addedItem.platform_password = encrypt(addedItem.platform_password);
+            }
+
             const result = await passwordCollection.insertOne(addedItem);
             res.send(result)
         })
         app.get('/myCredentials/:email', async (req, res) => {
             const email = req.params.email;
-            console.log('email', email)
+
             const query = { user_email: email }
             const result = await passwordCollection.find(query).toArray()
+
+            result.forEach(item => {
+                if (item.platform_password) {
+
+                    item.platform_password = decrypt(item.platform_password);
+                }
+            });
+
             res.send(result)
         })
 
@@ -50,7 +98,10 @@ async function run() {
             const id = req.params.id;
             const query = { _id: new ObjectId(id) }
             const result = await passwordCollection.findOne(query)
-            console.log('result', result)
+            if (result.platform_password) {
+                result.platform_password = decrypt(result.platform_password);
+            }
+
             res.send(result)
         })
 
@@ -64,16 +115,16 @@ async function run() {
                     platform_name: updateInfo.platform_name,
                     platform_owner: updateInfo.platform_owner,
                     platform_email: updateInfo.platform_email,
-                    platform_password: updateInfo.platform_password
+                    platform_password: encrypt(updateInfo.platform_password)
                 }
             }
             const result = await passwordCollection.updateOne(filter, item, options)
             res.send(result)
         })
 
-        app.delete('/deletePlatformCredentials/:id', async(req, res)=>{
+        app.delete('/deletePlatformCredentials/:id', async (req, res) => {
             const id = req.params.id;
-            const query = {_id: new ObjectId(id)}
+            const query = { _id: new ObjectId(id) }
             const result = await passwordCollection.deleteOne(query)
             res.send(result)
         })
