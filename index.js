@@ -1,6 +1,8 @@
 const express = require('express');
 const cors = require('cors')
 const app = express();
+const jwt = require('jsonwebtoken')
+const cookieParser = require('cookie-parser')
 const port = process.env.PORT || 5000;
 require('dotenv').config()
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
@@ -42,9 +44,27 @@ function decrypt(text) {
     }
 }
 //MIDDLEWARE
-app.use(cors());
+app.use(cors({
+    origin: ['http://localhost:5173', 'https://medventure-9cc22.web.app', 'https://medventure-9cc22.firebaseapp.com']
+}));
 app.use(express.json());
+app.use(cookieParser())
 
+const verifyToken = (req, res, next) => {
+    // console.log('inside verify token', req.headers)
+    if (!req.headers.authorization) {
+        return res.status(401).send({ message: 'forbidden access' })
+    }
+    const token = req.headers.authorization.split(' ')[1];
+    jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
+        if (err) {
+            return res.status(401).send({ message: 'forbidden access' })
+        }
+        req.decoded = decoded;
+        next()
+    })
+
+}
 // AvishekRoy JbDmmHI7BojprzkP
 
 
@@ -65,11 +85,18 @@ const client = new MongoClient(uri, {
 
 async function run() {
     try {
+        app.post('/jwt', async (req, res) => {
+            const user = req.body;
+            const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
+                expiresIn: '1h'
+            })
+            res.send({ token });
+        })
         // Connect the client to the server	(optional starting in v4.7)
         const passwordCollection = client.db('Password_Manager').collection('password');
         const itemCollection = client.db('itemsDB').collection('items');
 
-        app.post('/saveCredentials', async (req, res) => {
+        app.post('/saveCredentials', verifyToken, async (req, res) => {
             const addedItem = req.body;
             if (addedItem.platform_password) {
                 addedItem.platform_password = encrypt(addedItem.platform_password);
@@ -78,7 +105,7 @@ async function run() {
             const result = await passwordCollection.insertOne(addedItem);
             res.send(result)
         })
-        app.get('/myCredentials/:email', async (req, res) => {
+        app.get('/myCredentials/:email', verifyToken, async (req, res) => {
             const email = req.params.email;
 
             const query = { user_email: email }
@@ -94,7 +121,7 @@ async function run() {
             res.send(result)
         })
 
-        app.get('/selectedPlatform/:id', async (req, res) => {
+        app.get('/selectedPlatform/:id', verifyToken, async (req, res) => {
             const id = req.params.id;
             const query = { _id: new ObjectId(id) }
             const result = await passwordCollection.findOne(query)
@@ -105,7 +132,7 @@ async function run() {
             res.send(result)
         })
 
-        app.put('/updateCredentials/:id', async (req, res) => {
+        app.put('/updateCredentials/:id', verifyToken, async (req, res) => {
             const id = req.params.id;
             const filter = { _id: new ObjectId(id) }
             const options = { upsert: true }
@@ -122,7 +149,7 @@ async function run() {
             res.send(result)
         })
 
-        app.delete('/deletePlatformCredentials/:id', async (req, res) => {
+        app.delete('/deletePlatformCredentials/:id', verifyToken, async (req, res) => {
             const id = req.params.id;
             const query = { _id: new ObjectId(id) }
             const result = await passwordCollection.deleteOne(query)
