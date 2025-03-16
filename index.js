@@ -3,10 +3,10 @@ const cors = require('cors')
 const app = express();
 const jwt = require('jsonwebtoken')
 const cookieParser = require('cookie-parser')
+const nodemailer = require('nodemailer');
 const port = process.env.PORT || 5000;
 require('dotenv').config()
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
-
 const crypto = require('crypto');
 
 const algorithm = 'aes-256-cbc';
@@ -65,7 +65,11 @@ const verifyToken = (req, res, next) => {
     })
 
 }
+
 // AvishekRoy JbDmmHI7BojprzkP
+// Add this token to env file
+// ACCESS_TOKEN_SECRET=a6e7f2636c2f57f8cbbc9dfdc7f0effd8b75f56bfdc2143b762dbe70690efad60ed2ef1aa763e524f6b925521413f8315bd4347ed9d0f1899aa0abe8dc8efa29
+// lade hbim lhyz hrcg
 
 
 
@@ -83,34 +87,108 @@ const client = new MongoClient(uri, {
     }
 });
 
+const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+        user: process.env.EMAIL_USER,  // Add to .env file
+        pass: process.env.EMAIL_PASS   // Add to .env file
+    }
+});
+
 async function run() {
     try {
-        app.post('/jwt', async (req, res) => {
-            const user = req.body;
-            const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
-                expiresIn: '1h'
-            })
-            res.send({ token });
-        })
+        // app.post('/jwt', async (req, res) => {
+        //     const user = req.body;
+        //     const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
+        //         expiresIn: '1h'
+        //     })
+        //     res.send({ token });
+        // })
+        // app.post('/logout', async (req, res) => {
+        //     res
+        //         .clearCookie('token', {
+        //             ...cookieOptions, maxAge: 0,
+        //         })
+        //         .send({ success: true })
+        // })
+
         // Connect the client to the server	(optional starting in v4.7)
         const passwordCollection = client.db('Password_Manager').collection('password');
-        const itemCollection = client.db('itemsDB').collection('items');
+        const otpCollection = client.db('Password_Manager').collection('otps');
 
-        app.post('/saveCredentials', verifyToken, async (req, res) => {
+        app.post('/send-otp', async (req, res) => {
+            const { email } = req.body;
+            console.log('otp for email', email)
+            await otpCollection.deleteMany({ email });
+
+
+            // Generate a 6-digit OTP
+            const otp = Math.floor(100000 + Math.random() * 900000).toString();
+            const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // OTP expires in 5 minutes
+
+            // Store OTP in database
+            await otpCollection.insertOne({ email, otp, expiresAt });
+
+            // Send OTP via email
+            const mailOptions = {
+                from: process.env.EMAIL_USER,
+                to: email,
+                subject: 'Your OTP Code',
+                text: `Your OTP code is: ${otp}. It will expire in 5 minutes.`
+            };
+            transporter.sendMail(mailOptions, (error, info) => {
+                if (error) {
+                    console.log(error);
+                    return res.status(500).send({ message: 'Failed to send OTP' });
+                }
+                res.send({ message: 'OTP sent successfully' });
+            });
+        });
+
+        app.post('/verify-otp', async (req, res) => {
+            const { email, otp } = req.body;
+
+            console.log('email-', email)
+            console.log('otp-', otp)
+
+            // Find the OTP in the database
+            const storedOtp = await otpCollection.findOne({ email });
+
+            if (!storedOtp) {
+                return res.status(400).send({ message: 'OTP not found. Please request a new one.' });
+            }
+
+            if (storedOtp.otp !== otp) {
+                return res.status(400).send({ message: 'Invalid OTP' });
+            }
+
+            if (new Date() > storedOtp.expiresAt) {
+                return res.status(400).send({ message: 'OTP expired' });
+            }
+
+            // OTP is valid, generate JWT token
+            const token = jwt.sign({ email }, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1h' });
+
+            // Delete OTP after verification
+            await otpCollection.deleteOne({ email });
+
+            res.send({ token });
+        });
+
+
+        app.post('/saveCredentials',verifyToken, async (req, res) => {
             const addedItem = req.body;
             if (addedItem.platform_password) {
                 addedItem.platform_password = encrypt(addedItem.platform_password);
             }
-
             const result = await passwordCollection.insertOne(addedItem);
             res.send(result)
         })
-        app.get('/myCredentials/:email', verifyToken, async (req, res) => {
+        app.get('/myCredentials/:email',verifyToken, async (req, res) => {
             const email = req.params.email;
-
+            console.log('email', email)
             const query = { user_email: email }
             const result = await passwordCollection.find(query).toArray()
-
             result.forEach(item => {
                 if (item.platform_password) {
 
@@ -121,7 +199,7 @@ async function run() {
             res.send(result)
         })
 
-        app.get('/selectedPlatform/:id', verifyToken, async (req, res) => {
+        app.get('/selectedPlatform/:id',verifyToken, async (req, res) => {
             const id = req.params.id;
             const query = { _id: new ObjectId(id) }
             const result = await passwordCollection.findOne(query)
@@ -129,10 +207,11 @@ async function run() {
                 result.platform_password = decrypt(result.platform_password);
             }
 
+            console.log('result', result)
             res.send(result)
         })
 
-        app.put('/updateCredentials/:id', verifyToken, async (req, res) => {
+        app.put('/updateCredentials/:id',verifyToken, async (req, res) => {
             const id = req.params.id;
             const filter = { _id: new ObjectId(id) }
             const options = { upsert: true }
@@ -149,9 +228,9 @@ async function run() {
             res.send(result)
         })
 
-        app.delete('/deletePlatformCredentials/:id', verifyToken, async (req, res) => {
+        app.delete('/deletePlatformCredentials/:id',verifyToken, async(req, res)=>{
             const id = req.params.id;
-            const query = { _id: new ObjectId(id) }
+            const query = {_id: new ObjectId(id)}
             const result = await passwordCollection.deleteOne(query)
             res.send(result)
         })
@@ -171,9 +250,9 @@ run().catch(console.dir);
 
 
 app.get('/', (req, res) => {
-    res.send('passwor manager server is running by Avishek')
+    res.send('Art and craft server is running avishek')
 })
 
 app.listen(port, () => {
-    console.log(`password manager server running on port: ${port}`)
+    console.log(`art craft server running ona: ${port}`)
 })
